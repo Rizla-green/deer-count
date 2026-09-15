@@ -102,6 +102,11 @@ function wireStaticEvents(){
   $('add-livestock-btn').addEventListener('click', ()=> addChipPrompt('livestock', 'Add livestock', 'e.g. Sheep', true));
   $('add-scheme-btn').addEventListener('click', ()=> addChipPrompt('schemes', 'Add scheme', 'e.g. Countryside Stewardship'));
   $('shoot-toggle').addEventListener('click', ()=> toggleFarmBool('hasShoot', 'shoot-toggle'));
+  $('deer-detail-toggle').addEventListener('click', async ()=>{
+    const newVal = !(currentFarmData.deerDetailBreakdown !== false);
+    setToggleState('deer-detail-toggle', newVal);
+    await saveFarmField('deerDetailBreakdown', newVal);
+  });
   $('dropbox-toggle').addEventListener('click', ()=> toggleFarmBool('dropboxEnabled', 'dropbox-toggle'));
   $('dropbox-token').addEventListener('change', e=>{
     localStorage.setItem('dc_dropbox_token_'+currentFarmId, e.target.value);
@@ -179,7 +184,7 @@ async function createNewFarm(){
     const ref = await DC.fns.addDoc(DC.fns.collection(DC.db,'farms'), {
       name: name.trim(), postcode:'', ownerId: currentUser.uid,
       deerSpecies:[], otherSpecies:[], parcels:[], livestock:[], schemes:[],
-      hasShoot:false, dropboxEnabled:false, createdAt: DC.fns.serverTimestamp()
+      hasShoot:false, dropboxEnabled:false, deerDetailBreakdown:true, createdAt: DC.fns.serverTimestamp()
     });
     showToast('Farm created');
     openFarmMap(ref.id);
@@ -244,7 +249,7 @@ function redrawParcels(){
   drawnItemsLayer.clearLayers();
   const parcels = currentFarmData.parcels || [];
   parcels.forEach(p=>{
-    const latlngs = p.latlngs.map(c=> L.latLng(c[0], c[1]));
+    const latlngs = p.latlngs.map(c=> L.latLng(c.lat, c.lng));
     const layer = L.polygon(latlngs, { color: parcelColor(p.type), weight:2, fillOpacity:0.28 });
     layer._parcelId = p.id;
     layer.bindTooltip(p.name, { permanent:true, direction:'center', className:'parcel-label' });
@@ -293,7 +298,7 @@ function openNewParcelModal(layer, existingParcel){
       const parcels = (currentFarmData.parcels||[]).map(p=> p.id===existingParcel.id ? {...p, name, type, sizeAcres} : p);
       await saveFarmField('parcels', parcels);
     } else {
-      const latlngs = layer.getLatLngs()[0].map(ll=>[ll.lat, ll.lng]);
+      const latlngs = layer.getLatLngs()[0].map(ll=>({ lat: ll.lat, lng: ll.lng }));
       const parcel = { id: uid(), name, type, sizeAcres, latlngs };
       const parcels = [...(currentFarmData.parcels||[]), parcel];
       await saveFarmField('parcels', parcels);
@@ -370,16 +375,25 @@ function openLogSheet(parcelId){
   const otherSpecies = (currentFarmData.otherSpecies||[]);
   const todayStr = new Date().toISOString().slice(0,10);
 
+  const detailBreakdown = currentFarmData.deerDetailBreakdown !== false;
   let speciesHtml = '';
-  deerSpecies.forEach(sid=>{
-    const sp = DEER_SPECIES.find(d=>d.id===sid);
-    if(!sp) return;
-    speciesHtml += `<div class="species-group-title">${sp.name}</div>`;
-    sp.classes.forEach(cls=>{
-      const key = `${sp.id}|${cls}`;
-      speciesHtml += stepperRowHtml(key, cls);
+  if(deerSpecies.length){
+    speciesHtml += `<div class="species-group-title">Deer</div>`;
+    deerSpecies.forEach(sid=>{
+      const sp = DEER_SPECIES.find(d=>d.id===sid);
+      if(!sp) return;
+      if(detailBreakdown){
+        speciesHtml += `<div style="font-size:12px;color:var(--muted);margin:8px 0 4px;">${sp.name}</div>`;
+        sp.classes.forEach(cls=>{
+          const key = `${sp.id}|${cls}`;
+          speciesHtml += stepperRowHtml(key, cls);
+        });
+      } else {
+        const key = `${sp.id}|total`;
+        speciesHtml += stepperRowHtml(key, sp.name);
+      }
     });
-  });
+  }
   if(otherSpecies.length){
     speciesHtml += `<div class="species-group-title">Other species</div>`;
     otherSpecies.forEach(sp=>{
@@ -470,7 +484,7 @@ async function saveScan(parcel){
       let speciesName = label;
       if(group!=='other'){
         const sp = DEER_SPECIES.find(d=>d.id===group);
-        speciesName = `${sp.name} - ${label}`;
+        speciesName = (label==='total') ? sp.name : `${sp.name} - ${label}`;
       }
       counts.push({ species: speciesName, count: n });
     }
@@ -510,6 +524,7 @@ function openSettingsScreen(){
   renderParcelSettingsList();
   setToggleState('shoot-toggle', !!currentFarmData.hasShoot);
   setToggleState('dropbox-toggle', !!currentFarmData.dropboxEnabled);
+  setToggleState('deer-detail-toggle', currentFarmData.deerDetailBreakdown !== false);
   showScreen('screen-settings');
 }
 function setToggleState(id, on){
