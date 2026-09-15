@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Deer Count</title>
+<meta name="theme-color" content="#161d17">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<style>
+  :root{
+    --bg:#0f1410; --panel:#161d17; --panel2:#1d251e; --panel3:#242e24; --border:#2c3a2c;
+    --text:#e8ede7; --muted:#93a493; --accent:#5c8a3f; --accent2:#7cb35c;
+    --danger:#b3503f; --warn:#c99a3f; --blue:#4a7ba6;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);
+    overflow:hidden;}
+  #root{height:100%;width:100%;position:relative;}
+  .screen{position:absolute;inset:0;background:var(--bg);display:none;flex-direction:column;overflow:hidden;}
+  .screen.active{display:flex;}
+  .scroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  button{cursor:pointer;font-family:inherit;}
+  input,select{font-family:inherit;}
+
+  /* Login */
+  .login-wrap{height:100%;display:flex;flex-direction:column;justify-content:center;padding:0 32px;max-width:400px;margin:0 auto;width:100%;}
+  .login-logo{width:110px;height:110px;display:block;margin:0 auto 14px;border-radius:50%;}
+  .login-title{text-align:center;font-size:21px;font-weight:700;margin-bottom:4px;}
+  .login-sub{text-align:center;font-size:13px;color:var(--muted);margin-bottom:26px;}
+  label{display:block;font-size:11.5px;color:var(--muted);margin:10px 0 5px;text-transform:uppercase;letter-spacing:.04em;}
+  input[type=text],input[type=email],input[type=password],input[type=number],input[type=date],select{
+    width:100%;padding:11px 13px;background:var(--panel2);border:1px solid var(--border);
+    border-radius:9px;color:var(--text);font-size:15px;
+  }
+  .btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:13px 14px;font-size:15px;font-weight:600;width:100%;text-align:center;}
+  .btn:active{background:var(--accent2);}
+  .btn.secondary{background:var(--panel2);border:1px solid var(--border);color:var(--text);}
+  .btn.danger{background:var(--danger);}
+  .btn.small{padding:8px 12px;font-size:13px;width:auto;}
+  .link-btn{background:none;border:none;color:var(--muted);font-size:12.5px;text-align:center;width:100%;padding:10px;text-decoration:underline;}
+  .err-msg{color:var(--danger);font-size:12.5px;margin-top:8px;min-height:16px;text-align:center;}
+
+  /* Topbar (used across app) */
+  .topbar{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;
+    background:var(--panel);flex-shrink:0;gap:10px;}
+  .topbar h1{font-size:16px;margin:0;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .topbar .back,.topbar .icon-btn{color:var(--muted);font-size:14px;background:none;border:none;padding:4px 6px;flex-shrink:0;}
+  .topbar .icon-btn{font-size:19px;}
+  .topbar .logo-sm{width:28px;height:28px;border-radius:50%;flex-shrink:0;}
+
+  /* Farms list */
+  .content{padding:16px;}
+  .farm-card{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;
+    display:flex;justify-content:space-between;align-items:center;}
+  .farm-card .fname{font-size:15px;font-weight:600;margin-bottom:3px;}
+  .farm-card .fmeta{font-size:11.5px;color:var(--muted);}
+  .farm-card .chev{color:var(--muted);font-size:18px;}
+  .fab{position:absolute;bottom:22px;right:22px;width:54px;height:54px;border-radius:50%;background:var(--accent);
+    display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;box-shadow:0 6px 16px rgba(0,0,0,.4);
+    border:none;z-index:10;}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:40px 20px;line-height:1.6;}
+  .offline-pill{position:fixed;top:10px;left:50%;transform:translateX(-50%);background:var(--warn);color:#1a1a0a;
+    font-size:11.5px;font-weight:700;padding:5px 14px;border-radius:20px;z-index:9999;display:none;}
+  .offline-pill.show{display:block;}
+
+  /* Map screen */
+  #map{position:absolute;inset:0;z-index:1;}
+  .map-topbar{position:absolute;top:0;left:0;right:0;padding:12px 14px;display:flex;justify-content:space-between;
+    align-items:flex-start;z-index:400;pointer-events:none;}
+  .map-topbar > *{pointer-events:auto;}
+  .pill{background:rgba(22,29,23,0.92);backdrop-filter:blur(4px);border:1px solid var(--border);border-radius:20px;
+    padding:8px 14px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:6px;}
+  .pill button{background:none;border:none;color:var(--text);font-size:15px;}
+  .weather-pill{background:rgba(22,29,23,0.92);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:11.5px;color:var(--muted);}
+  .parcel-label{background:rgba(10,15,10,0.55);border-radius:5px;padding:1px 6px;font-size:11px;font-weight:600;
+    color:#fff;white-space:nowrap;border:none!important;box-shadow:none!important;}
+  .parcel-label::before{display:none;}
+  .count-badge-icon{background:var(--danger);color:#fff;font-size:11px;font-weight:700;border-radius:50%;
+    width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg);}
+
+  /* Bottom sheet */
+  .sheet-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:flex-end;
+    justify-content:center;}
+  .sheet{background:var(--panel);width:100%;max-width:480px;border-radius:18px 18px 0 0;padding:16px 18px 20px;
+    border-top:1px solid var(--border);max-height:85vh;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  .sheet-handle{width:36px;height:4px;background:var(--border);border-radius:3px;margin:0 auto 12px;}
+  .sheet h2{font-size:16px;margin:0 0 2px;}
+  .sheet .sub{font-size:12px;color:var(--muted);margin-bottom:14px;}
+  .sheet-close{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--muted);font-size:20px;}
+
+  .species-group{margin-bottom:12px;}
+  .species-group-title{font-size:12px;font-weight:700;color:var(--accent2);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.03em;}
+  .stepper-row{display:flex;justify-content:space-between;align-items:center;background:var(--panel2);
+    border:1px solid var(--border);border-radius:9px;padding:8px 10px;margin-bottom:7px;}
+  .stepper-row .sname{font-size:13.5px;}
+  .stepper{display:flex;align-items:center;gap:10px;}
+  .stepper button{width:28px;height:28px;border-radius:7px;background:var(--panel3);border:1px solid var(--border);color:var(--text);font-size:16px;line-height:1;}
+  .stepper .val{min-width:20px;text-align:center;font-size:14px;font-weight:600;}
+  .stepper input{width:44px;text-align:center;padding:5px;border-radius:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);font-size:13.5px;}
+
+  .hist-item{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:8px;}
+  .hist-item .top{display:flex;justify-content:space-between;margin-bottom:5px;gap:8px;}
+  .hist-item .date{font-size:13px;font-weight:600;}
+  .hist-item .method{font-size:9.5px;color:var(--muted);background:var(--panel3);padding:2px 8px;border-radius:20px;white-space:nowrap;}
+  .hist-tally{display:flex;flex-wrap:wrap;gap:5px;}
+  .hist-tally span{font-size:11px;background:var(--panel3);padding:3px 8px;border-radius:20px;color:var(--muted);}
+  .hist-tally b{color:var(--text);}
+  .hist-notes{font-size:11.5px;color:var(--muted);margin-top:6px;font-style:italic;}
+  .pending-tag{color:var(--warn);font-size:10px;font-weight:700;}
+
+  /* Settings */
+  .settings-section{margin-bottom:22px;}
+  .settings-section h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px;}
+  .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:6px;}
+  .chip{background:var(--panel2);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:12.5px;display:flex;align-items:center;gap:7px;}
+  .chip .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+  .chip .x{color:var(--muted);font-weight:700;background:none;border:none;font-size:14px;padding:0;}
+  .add-chip{border:1px dashed var(--border);color:var(--muted);background:none;}
+  .parcel-row{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-bottom:8px;
+    display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .parcel-row .pname{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px;}
+  .parcel-row .pmeta{font-size:11px;color:var(--muted);margin-top:2px;}
+  .swatch{width:12px;height:12px;border-radius:3px;flex-shrink:0;}
+  .toggle-row{display:flex;justify-content:space-between;align-items:center;background:var(--panel2);border:1px solid var(--border);
+    border-radius:10px;padding:12px 14px;margin-bottom:8px;}
+  .toggle{width:42px;height:24px;background:var(--accent);border-radius:20px;position:relative;border:none;flex-shrink:0;}
+  .toggle::after{content:'';position:absolute;width:18px;height:18px;background:#fff;border-radius:50%;top:3px;right:3px;transition:.15s;}
+  .toggle.off{background:var(--border);}
+  .toggle.off::after{right:auto;left:3px;}
+  .rm-x{background:none;border:none;color:var(--muted);font-size:18px;padding:2px 6px;}
+  .rm-x:hover{color:var(--danger);}
+
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:2000;padding:20px;}
+  .modal{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;width:100%;max-width:320px;}
+  .modal h3{margin:0 0 14px;font-size:15.5px;}
+  .modal .actions{display:flex;gap:8px;margin-top:16px;}
+  .modal .actions .btn{flex:1;}
+
+  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel2);
+    border:1px solid var(--accent2);color:var(--text);padding:10px 20px;border-radius:9px;font-size:13px;
+    z-index:3000;opacity:0;pointer-events:none;transition:opacity .25s;max-width:88%;text-align:center;}
+  #toast.show{opacity:1;}
+  #toast.err{border-color:var(--danger);}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;
+    border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .field-select-list{max-height:60vh;}
+</style>
+</head>
+<body>
+<div id="root">
+
+  <div class="offline-pill" id="offline-pill">📡 Offline — changes will sync later</div>
+
+  <!-- LOGIN -->
+  <div class="screen active" id="screen-login">
+    <div class="scroll">
+      <div class="login-wrap">
+        <img class="login-logo" src="logo.png" alt="Deer Count">
+        <div class="login-title">Deer Count</div>
+        <div class="login-sub">Survey · Monitor · Track</div>
+        <label style="margin-top:0;">Email</label>
+        <input type="email" id="login-email" autocomplete="username">
+        <label>Password</label>
+        <input type="password" id="login-password" autocomplete="current-password">
+        <div class="err-msg" id="login-err"></div>
+        <button class="btn" id="login-btn" style="margin-top:6px;">Log in</button>
+        <button class="link-btn" id="forgot-link">Forgot password?</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FORGOT PASSWORD -->
+  <div class="screen" id="screen-forgot">
+    <div class="scroll">
+      <div class="login-wrap">
+        <div class="login-title" style="margin-bottom:4px;">Reset password</div>
+        <div class="login-sub" style="margin-bottom:26px;">Enter your email and we'll send a reset link</div>
+        <label style="margin-top:0;">Email</label>
+        <input type="email" id="forgot-email">
+        <div class="err-msg" id="forgot-err"></div>
+        <button class="btn" id="send-reset-btn" style="margin-top:6px;">Send reset link</button>
+        <button class="btn secondary" id="back-to-login-btn" style="margin-top:10px;">‹ Back to log in</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FARMS LIST -->
+  <div class="screen" id="screen-farms">
+    <div class="topbar">
+      <img class="logo-sm" src="logo.png" alt="">
+      <h1>Your Farms</h1>
+      <button class="icon-btn" id="account-btn">⋮</button>
+    </div>
+    <div class="scroll">
+      <div class="content" id="farm-list"></div>
+    </div>
+    <button class="fab" id="add-farm-fab">+</button>
+  </div>
+
+  <!-- FARM MAP -->
+  <div class="screen" id="screen-map">
+    <div id="map"></div>
+    <div class="map-topbar">
+      <span class="pill"><button id="map-back-btn">‹</button><span id="map-farm-name">Farm</span></span>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
+        <span class="pill" style="padding:8px 10px;"><button id="map-settings-btn">⚙️</button></span>
+        <span class="weather-pill" id="weather-pill">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- FARM SETTINGS -->
+  <div class="screen" id="screen-settings">
+    <div class="topbar">
+      <button class="back" id="settings-back-btn">‹ Back</button>
+      <h1 id="settings-farm-name">Settings</h1>
+      <span style="width:30px;"></span>
+    </div>
+    <div class="scroll">
+      <div class="content">
+        <div class="settings-section">
+          <h3>Farm details</h3>
+          <label style="margin-top:0;">Farm name</label>
+          <input type="text" id="set-farm-name">
+          <label>Postcode (for weather)</label>
+          <input type="text" id="set-postcode" placeholder="e.g. LU7 0LB">
+        </div>
+
+        <div class="settings-section">
+          <h3>UK Deer species present</h3>
+          <div class="chip-row" id="deer-species-chips"></div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Other species</h3>
+          <div class="chip-row" id="other-species-chips"></div>
+          <button class="chip add-chip" id="add-other-species-btn">+ Add species</button>
+        </div>
+
+        <div class="settings-section">
+          <h3>Fields &amp; parcels</h3>
+          <div id="parcel-list"></div>
+          <div class="empty" id="parcel-empty-hint" style="padding:14px;font-size:12px;">Draw parcels on the map screen — tap "Add field" there.</div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Livestock</h3>
+          <div class="chip-row" id="livestock-chips"></div>
+          <button class="chip add-chip" id="add-livestock-btn">+ Add livestock</button>
+        </div>
+
+        <div class="settings-section">
+          <h3>Schemes</h3>
+          <div class="chip-row" id="scheme-chips"></div>
+          <button class="chip add-chip" id="add-scheme-btn">+ Add scheme</button>
+        </div>
+
+        <div class="settings-section">
+          <h3>Game shoot</h3>
+          <div class="toggle-row"><span>Runs a game shoot</span><button class="toggle" id="shoot-toggle"></button></div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Backup &amp; export</h3>
+          <div class="toggle-row"><span>Auto backup to Dropbox on save</span><button class="toggle" id="dropbox-toggle"></button></div>
+          <label style="margin-top:0;">Dropbox access token</label>
+          <input type="password" id="dropbox-token" placeholder="Paste your Dropbox token">
+          <button class="btn secondary" id="export-btn" style="margin-top:12px;">Export all scans (Excel)</button>
+        </div>
+
+        <div class="settings-section">
+          <h3>Danger zone</h3>
+          <button class="btn danger" id="delete-farm-btn">Delete this farm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {
+  getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {
+  getFirestore, collection, doc, setDoc, getDoc, getDocs, addDoc, updateDoc, deleteDoc,
+  query, where, onSnapshot, enableIndexedDbPersistence, serverTimestamp, writeBatch
+} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDkmsNnjuVleRb2F-mBQugbXiaHzLan4YY",
+  authDomain: "deer-count-56bda.firebaseapp.com",
+  projectId: "deer-count-56bda",
+  storageBucket: "deer-count-56bda.firebasestorage.app",
+  messagingSenderId: "295101771001",
+  appId: "1:295101771001:web:0fe9af69b94007a0bd0628"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+try {
+  await enableIndexedDbPersistence(db);
+} catch(e) {
+  console.warn("Offline persistence not enabled:", e.code);
+}
+
+window.__DC = { app, auth, db, fns: {
+  onAuthStateChanged, signInWithEmailAndPassword, signOut, sendPasswordResetEmail,
+  collection, doc, setDoc, getDoc, getDocs, addDoc, updateDoc, deleteDoc,
+  query, where, onSnapshot, serverTimestamp, writeBatch
+}};
+window.dispatchEvent(new Event('firebase-ready'));
+</script>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+<script>
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(e=> console.warn('SW registration failed', e));
+  });
+}
+</script>
+</body>
+</html>
