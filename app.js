@@ -29,9 +29,10 @@ let currentUser = null;
 let currentFarmId = null;
 let currentFarmData = null;
 let farmsUnsub = null;
-let scansUnsub = null;
+let sessionsUnsub = null;
 let allFarms = [];
-let currentScans = [];
+let currentSessions = [];
+let activeSession = null; // { id: null|existingId, date, time, method, weather, notes, fields:[{parcelId,parcelName,counts:[]}] }
 
 let map, drawnItemsLayer, drawControl;
 let activeParcelId = null;
@@ -73,7 +74,7 @@ window.addEventListener('firebase-ready', () => {
     } else {
       currentUser = null;
       if(farmsUnsub) farmsUnsub();
-      if(scansUnsub) scansUnsub();
+      if(sessionsUnsub) sessionsUnsub();
       showScreen('screen-login');
     }
   });
@@ -92,9 +93,23 @@ function wireStaticEvents(){
   });
   $('add-farm-fab').addEventListener('click', createNewFarm);
 
-  $('map-back-btn').addEventListener('click', ()=>{ showScreen('screen-farms'); });
+  $('map-back-btn').addEventListener('click', ()=>{
+    if(activeSession && !confirm('Discard this in-progress count before leaving?')) return;
+    activeSession = null;
+    showScreen('screen-farms');
+  });
   $('map-settings-btn').addEventListener('click', ()=> openSettingsScreen());
+  $('map-history-btn').addEventListener('click', ()=> openHistorySheet());
   $('settings-back-btn').addEventListener('click', ()=> showScreen('screen-map'));
+  $('start-count-btn').addEventListener('click', ()=> openSessionSetupModal());
+  $('discard-count-btn').addEventListener('click', ()=>{
+    if(!confirm('Discard this count? Anything logged so far will be lost.')) return;
+    activeSession = null;
+    renderCountBar();
+    refreshAllBadges();
+  });
+  $('save-count-btn').addEventListener('click', saveActiveSession);
+  $('export-all-btn') && $('export-all-btn').addEventListener('click', exportAllFarms);
 
   $('set-farm-name').addEventListener('change', e=> saveFarmField('name', e.target.value));
   $('set-postcode').addEventListener('change', e=> { saveFarmField('postcode', e.target.value); fetchWeather(); });
@@ -199,10 +214,12 @@ function openFarmMap(farmId){
   currentFarmId = farmId;
   currentFarmData = allFarms.find(f=>f.id===farmId) || {};
   $('map-farm-name').textContent = currentFarmData.name || 'Farm';
+  activeSession = null;
   showScreen('screen-map');
   fetchWeather();
-  subscribeScans(farmId);
+  subscribeSessions(farmId);
   if(!map){ initMap(); } else { redrawParcels(); }
+  renderCountBar();
   setTimeout(()=> map && map.invalidateSize(), 150);
 }
 
@@ -253,10 +270,10 @@ function redrawParcels(){
     const layer = L.polygon(latlngs, { color: parcelColor(p.type), weight:2, fillOpacity:0.28 });
     layer._parcelId = p.id;
     layer.bindTooltip(p.name, { permanent:true, direction:'center', className:'parcel-label' });
-    layer.on('click', ()=> openLogSheet(p.id));
+    layer.on('click', ()=> onParcelTapped(p.id));
     drawnItemsLayer.addLayer(layer);
-    updateParcelBadge(p.id);
   });
+  refreshAllBadges();
   if(parcels.length){
     try{ map.fitBounds(drawnItemsLayer.getBounds(), {maxZoom:17, padding:[30,30]}); }catch(e){}
   }
@@ -332,40 +349,171 @@ async function fetchWeather(){
   }
 }
 
-// -------------------- Scans (log + history) --------------------
-function subscribeScans(farmId){
-  if(scansUnsub) scansUnsub();
-  const q = DC.fns.collection(DC.db, 'farms', farmId, 'scans');
-  scansUnsub = DC.fns.onSnapshot(q, snap=>{
-    currentScans = [];
-    snap.forEach(d=> currentScans.push({ id:d.id, ...d.data() }));
-    currentScans.sort((a,b)=> (b.date||'').localeCompare(a.date||''));
-    currentScans.forEach(s=> updateParcelBadge(s.parcelId));
-    renderFarmList(); // refresh field counts on farms list too
+// -------------------- Count sessions (log + history) --------------------
+function subscribeSessions(farmId){
+  if(sessionsUnsub) sessionsUnsub();
+  const q = DC.fns.collection(DC.db, 'farms', farmId, 'sessions');
+  sessionsUnsub = DC.fns.onSnapshot(q, snap=>{
+    currentSessions = [];
+    snap.forEach(d=> currentSessions.push({ id:d.id, ...d.data() }));
+    currentSessions.sort((a,b)=> `${b.date} ${b.time||''}`.localeCompare(`${a.date} ${a.time||''}`));
+    refreshAllBadges();
+    renderFarmList();
   }, err=> console.error(err));
 }
 
-function updateParcelBadge(parcelId){
+function nowTimeStr(){
+  const d = new Date();
+  return d.toTimeString().slice(0,5);
+}
+
+// ---- Count bar (start / save / discard) ----
+function renderCountBar(){
+  const active = !!activeSession;
+  $('start-count-btn').style.display = active ? 'none' : 'block';
+  $('active-session-bar').style.display = active ? 'flex' : 'none';
+  if(active){
+    $('active-session-info').innerHTML =
+      `<b>${activeSession.date}</b> ${activeSession.time||''} · ${escapeHtml(activeSession.method||'')} · ${activeSession.fields.length} field${activeSession.fields.length!==1?'s':''} logged`;
+  }
+}
+
+function openSessionSetupModal(existingSession){
+  const isEdit = !!existingSession;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  const nowDate = new Date().toISOString().slice(0,10);
+  const weatherRaw = $('weather-pill').dataset.cached;
+  let weatherStr = $('weather-pill').textContent;
+  try{ if(weatherRaw){ const w = JSON.parse(weatherRaw); weatherStr = `${w.temp}°C, ${w.wind}mph wind`; } }catch(e){}
+
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>${isEdit ? 'Edit count' : 'Start a count'}</h3>
+      <label style="margin-top:0;">Date</label>
+      <input type="date" id="sess-date" value="${isEdit?existingSession.date:nowDate}">
+      <label>Time</label>
+      <input type="text" id="sess-time" value="${isEdit?(existingSession.time||''):nowTimeStr()}" placeholder="HH:MM">
+      <label>Method</label>
+      <select id="sess-method">${SCAN_METHODS.map(m=>`<option ${isEdit&&existingSession.method===m?'selected':''}>${m}</option>`).join('')}</select>
+      <label>Weather</label>
+      <input type="text" id="sess-weather" value="${isEdit?(existingSession.weather||''):weatherStr}">
+      <div class="actions">
+        <button class="btn secondary" id="sess-cancel">Cancel</button>
+        <button class="btn" id="sess-confirm" style="flex:1;">${isEdit?'Continue editing':'Start'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const cleanup = ()=> document.body.removeChild(overlay);
+  overlay.querySelector('#sess-cancel').onclick = cleanup;
+  overlay.querySelector('#sess-confirm').onclick = ()=>{
+    const date = overlay.querySelector('#sess-date').value;
+    const time = overlay.querySelector('#sess-time').value.trim();
+    const method = overlay.querySelector('#sess-method').value;
+    const weather = overlay.querySelector('#sess-weather').value.trim();
+    if(!date){ showToast('Pick a date', true); return; }
+    activeSession = isEdit
+      ? { ...existingSession, date, time, method, weather }
+      : { id:null, date, time, method, weather, notes:'', fields:[] };
+    cleanup();
+    renderCountBar();
+    refreshAllBadges();
+    showToast(isEdit ? 'Editing count — tap fields to update' : 'Count started — tap a field to log it');
+  };
+}
+
+async function saveActiveSession(){
+  if(!activeSession) return;
+  if(!activeSession.fields.length){ showToast('Log at least one field before saving', true); return; }
+  const payload = {
+    date: activeSession.date, time: activeSession.time||'', method: activeSession.method,
+    weather: activeSession.weather||'', notes: activeSession.notes||'', fields: activeSession.fields,
+    updatedAt: DC.fns.serverTimestamp()
+  };
+  try{
+    if(activeSession.id){
+      await DC.fns.updateDoc(DC.fns.doc(DC.db,'farms',currentFarmId,'sessions',activeSession.id), payload);
+    } else {
+      payload.createdAt = DC.fns.serverTimestamp();
+      await DC.fns.addDoc(DC.fns.collection(DC.db,'farms',currentFarmId,'sessions'), payload);
+    }
+    showToast(navigator.onLine ? 'Count saved' : 'Saved offline — will sync later');
+    activeSession = null;
+    renderCountBar();
+    refreshAllBadges();
+    if(currentFarmData.dropboxEnabled){ backupToDropbox(); }
+  }catch(e){
+    console.error(e);
+    showToast('Could not save — check connection', true);
+  }
+}
+
+// ---- Badges on the map ----
+function refreshAllBadges(){
   if(!drawnItemsLayer) return;
   drawnItemsLayer.eachLayer(layer=>{
-    if(layer._parcelId !== parcelId) return;
-    const scans = currentScans.filter(s=>s.parcelId===parcelId);
+    const parcelId = layer._parcelId;
     if(layer._badgeMarker){ map.removeLayer(layer._badgeMarker); layer._badgeMarker=null; }
-    if(!scans.length) return;
-    const latest = scans[0];
-    const total = (latest.counts||[]).reduce((a,c)=>a+Number(c.count||0),0);
-    if(!total) return;
+
+    let total = null, staged = false;
+    if(activeSession){
+      const f = activeSession.fields.find(x=>x.parcelId===parcelId);
+      if(f){ total = f.counts.reduce((a,c)=>a+Number(c.count||0),0); staged = true; }
+    }
+    if(total===null){
+      const savedSession = currentSessions.find(s=> (s.fields||[]).some(f=>f.parcelId===parcelId));
+      if(savedSession){
+        const f = savedSession.fields.find(f=>f.parcelId===parcelId);
+        total = (f.counts||[]).reduce((a,c)=>a+Number(c.count||0),0);
+      }
+    }
+    if(total===null || !total) return;
     const center = layer.getBounds().getCenter();
-    const icon = L.divIcon({ className:'', html:`<div class="count-badge-icon">${total}</div>`, iconSize:[24,24] });
+    const icon = L.divIcon({ className:'', html:`<div class="count-badge-icon${staged?' staged':''}">${total}</div>`, iconSize:[24,24] });
     layer._badgeMarker = L.marker(center, { icon, interactive:false }).addTo(map);
   });
 }
 
-function openLogSheet(parcelId){
+// ---- Tapping a field on the map ----
+function onParcelTapped(parcelId){
+  if(activeSession){
+    openFieldEntrySheet(parcelId);
+  } else {
+    const parcel = (currentFarmData.parcels||[]).find(p=>p.id===parcelId);
+    const overlay = document.createElement('div');
+    overlay.className = 'sheet-overlay';
+    overlay.id = 'no-session-overlay';
+    overlay.innerHTML = `
+      <div class="sheet">
+        <button class="sheet-close" id="no-session-close">&times;</button>
+        <div class="sheet-handle"></div>
+        <h2>${escapeHtml(parcel?.name||'Field')}</h2>
+        <div class="sub">No count in progress</div>
+        <button class="btn" id="no-session-start" style="margin-top:6px;">Start a count now</button>
+        <button class="btn secondary" id="no-session-history" style="margin-top:8px;">View history</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cleanup = ()=> document.body.contains(overlay) && document.body.removeChild(overlay);
+    overlay.querySelector('#no-session-close').onclick = cleanup;
+    overlay.addEventListener('click', e=>{ if(e.target===overlay) cleanup(); });
+    overlay.querySelector('#no-session-start').onclick = ()=>{
+      cleanup();
+      openSessionSetupModal();
+      const origConfirm = document.querySelector('#sess-confirm');
+      // after starting, jump straight into this field's entry sheet
+      if(origConfirm){
+        origConfirm.addEventListener('click', ()=> setTimeout(()=>{ if(activeSession) openFieldEntrySheet(parcelId); }, 50), { once:true });
+      }
+    };
+    overlay.querySelector('#no-session-history').onclick = ()=>{ cleanup(); openHistorySheet(); };
+  }
+}
+
+function openFieldEntrySheet(parcelId){
   activeParcelId = parcelId;
   const parcel = (currentFarmData.parcels||[]).find(p=>p.id===parcelId);
-  if(!parcel) return;
-  const scans = currentScans.filter(s=>s.parcelId===parcelId);
+  if(!parcel || !activeSession) return;
+  const existing = activeSession.fields.find(f=>f.parcelId===parcelId);
 
   const overlay = document.createElement('div');
   overlay.className = 'sheet-overlay';
@@ -373,9 +521,20 @@ function openLogSheet(parcelId){
 
   const deerSpecies = (currentFarmData.deerSpecies||[]);
   const otherSpecies = (currentFarmData.otherSpecies||[]);
-  const todayStr = new Date().toISOString().slice(0,10);
-
   const detailBreakdown = currentFarmData.deerDetailBreakdown !== false;
+
+  function existingCountFor(key){
+    if(!existing) return 0;
+    const [group,label] = key.split('|');
+    let speciesName = label;
+    if(group!=='other'){
+      const sp = DEER_SPECIES.find(d=>d.id===group);
+      speciesName = (label==='total') ? sp.name : `${sp.name} - ${label}`;
+    }
+    const c = existing.counts.find(c=>c.species===speciesName);
+    return c ? c.count : 0;
+  }
+
   let speciesHtml = '';
   if(deerSpecies.length){
     speciesHtml += `<div class="species-group-title">Deer</div>`;
@@ -386,18 +545,19 @@ function openLogSheet(parcelId){
         speciesHtml += `<div style="font-size:12px;color:var(--muted);margin:8px 0 4px;">${sp.name}</div>`;
         sp.classes.forEach(cls=>{
           const key = `${sp.id}|${cls}`;
-          speciesHtml += stepperRowHtml(key, cls);
+          speciesHtml += stepperRowHtml(key, cls, existingCountFor(key));
         });
       } else {
         const key = `${sp.id}|total`;
-        speciesHtml += stepperRowHtml(key, sp.name);
+        speciesHtml += stepperRowHtml(key, sp.name, existingCountFor(key));
       }
     });
   }
   if(otherSpecies.length){
     speciesHtml += `<div class="species-group-title">Other species</div>`;
     otherSpecies.forEach(sp=>{
-      speciesHtml += stepperRowHtml(`other|${sp.name}`, sp.name);
+      const key = `other|${sp.name}`;
+      speciesHtml += stepperRowHtml(key, sp.name, existingCountFor(key));
     });
   }
   if(!deerSpecies.length && !otherSpecies.length){
@@ -409,26 +569,15 @@ function openLogSheet(parcelId){
       <button class="sheet-close" id="log-sheet-close">&times;</button>
       <div class="sheet-handle"></div>
       <h2>${escapeHtml(parcel.name)}</h2>
-      <div class="sub">${scans.length} scan${scans.length!==1?'s':''} logged</div>
-
-      <label style="margin-top:0;">Date</label>
-      <input type="date" id="scan-date" value="${todayStr}">
-      <label>Method</label>
-      <select id="scan-method">${SCAN_METHODS.map(m=>`<option>${m}</option>`).join('')}</select>
+      <div class="sub">${activeSession.date} ${activeSession.time||''} · ${escapeHtml(activeSession.method||'')}</div>
 
       <div id="species-steppers">${speciesHtml}</div>
 
-      <label>Notes (optional)</label>
-      <input type="text" id="scan-notes" placeholder="Conditions, behaviour, etc.">
-
-      <button class="btn" id="save-scan-btn" style="margin-top:14px;">Save scan</button>
-
-      ${scans.length ? `<div class="species-group-title" style="margin-top:20px;">History</div><div id="parcel-history"></div>` : ''}
+      <button class="btn" id="save-scan-btn" style="margin-top:14px;">${existing?'Update field':'Add to count'}</button>
     </div>`;
   document.body.appendChild(overlay);
 
   overlay.querySelectorAll('.stepper').forEach(st=>{
-    const key = st.dataset.key;
     const valEl = st.querySelector('.val');
     st.querySelector('.minus').addEventListener('click', ()=>{
       valEl.textContent = Math.max(0, Number(valEl.textContent)-1);
@@ -440,15 +589,13 @@ function openLogSheet(parcelId){
 
   overlay.querySelector('#log-sheet-close').addEventListener('click', closeLogSheet);
   overlay.addEventListener('click', e=>{ if(e.target===overlay) closeLogSheet(); });
-  overlay.querySelector('#save-scan-btn').addEventListener('click', ()=> saveScan(parcel));
-
-  if(scans.length){ renderParcelHistory(scans); }
+  overlay.querySelector('#save-scan-btn').addEventListener('click', ()=> addFieldToSession(parcel));
 }
-function stepperRowHtml(key, label){
+function stepperRowHtml(key, label, startVal){
   return `<div class="stepper-row">
     <span class="sname">${escapeHtml(label)}</span>
     <div class="stepper" data-key="${escapeHtml(key)}">
-      <button class="minus">–</button><span class="val">0</span><button class="plus">+</button>
+      <button class="minus">–</button><span class="val">${startVal||0}</span><button class="plus">+</button>
     </div>
   </div>`;
 }
@@ -457,25 +604,8 @@ function closeLogSheet(){
   if(overlay) overlay.remove();
   activeParcelId = null;
 }
-function renderParcelHistory(scans){
-  const el = document.getElementById('parcel-history');
-  if(!el) return;
-  el.innerHTML = scans.map(s=>{
-    const tally = (s.counts||[]).map(c=>`<span>${escapeHtml(c.species)}: <b>${c.count}</b></span>`).join('');
-    return `<div class="hist-item">
-      <div class="top"><span class="date">${s.date}</span><span class="method">${escapeHtml(s.method)}</span></div>
-      <div class="hist-tally">${tally}</div>
-      ${s.notes ? `<div class="hist-notes">${escapeHtml(s.notes)}</div>` : ''}
-    </div>`;
-  }).join('');
-}
 
-async function saveScan(parcel){
-  const date = $('scan-date').value;
-  const method = $('scan-method').value;
-  const notes = $('scan-notes').value.trim();
-  if(!date){ showToast('Pick a date first', true); return; }
-
+function addFieldToSession(parcel){
   const counts = [];
   document.querySelectorAll('#log-sheet-overlay .stepper').forEach(st=>{
     const n = Number(st.querySelector('.val').textContent);
@@ -491,24 +621,108 @@ async function saveScan(parcel){
   });
   if(!counts.length){ showToast('Log at least one animal', true); return; }
 
-  const weatherRaw = $('weather-pill').dataset.cached;
-  let weatherStr = $('weather-pill').textContent;
-  try{ if(weatherRaw){ const w = JSON.parse(weatherRaw); weatherStr = `${w.temp}°C, ${w.wind}mph wind`; } }catch(e){}
+  activeSession.fields = activeSession.fields.filter(f=>f.parcelId!==parcel.id);
+  activeSession.fields.push({ parcelId: parcel.id, parcelName: parcel.name, counts });
+  closeLogSheet();
+  renderCountBar();
+  refreshAllBadges();
+  showToast(`${parcel.name} added to count`);
+}
 
-  const scanData = {
-    parcelId: parcel.id, parcelName: parcel.name,
-    date, method, notes, counts, weather: weatherStr,
-    createdAt: DC.fns.serverTimestamp()
-  };
-  try{
-    await DC.fns.addDoc(DC.fns.collection(DC.db,'farms',currentFarmId,'scans'), scanData);
-    showToast(navigator.onLine ? 'Scan saved' : 'Saved offline — will sync later');
-    closeLogSheet();
-    if(currentFarmData.dropboxEnabled){ backupToDropbox(); }
-  }catch(e){
-    console.error(e);
-    showToast('Saved locally — will sync when online');
+// ---- History ----
+function sessionTallyHtml(session){
+  return (session.fields||[]).map(f=>{
+    const tally = (f.counts||[]).map(c=>`${c.species}: ${c.count}`).join(', ');
+    return `<div class="hist-field-row" data-parcel="${f.parcelId}">
+      <div><div class="fname">${escapeHtml(f.parcelName)}</div><div class="ftally">${escapeHtml(tally)}</div></div>
+      <button class="del-field" data-session="${session.id}" data-parcel="${f.parcelId}">&times;</button>
+    </div>`;
+  }).join('');
+}
+function openHistorySheet(){
+  const overlay = document.createElement('div');
+  overlay.className = 'sheet-overlay';
+  overlay.id = 'history-sheet-overlay';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <button class="sheet-close" id="history-close">&times;</button>
+      <div class="sheet-handle"></div>
+      <h2>Count history</h2>
+      <div class="sub">${currentSessions.length} count${currentSessions.length!==1?'s':''} logged</div>
+      <div id="history-list"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#history-close').onclick = ()=> overlay.remove();
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+  renderHistoryList();
+}
+function renderHistoryList(){
+  const el = $('history-list');
+  if(!el) return;
+  if(!currentSessions.length){
+    el.innerHTML = `<div class="empty">No counts logged yet.</div>`;
+    return;
   }
+  el.innerHTML = currentSessions.map(s=>{
+    const totalAnimals = (s.fields||[]).reduce((sum,f)=> sum + (f.counts||[]).reduce((a,c)=>a+Number(c.count||0),0), 0);
+    return `<div class="hist-session" data-id="${s.id}">
+      <div class="top" data-toggle="${s.id}">
+        <div><div class="date">${s.date} ${s.time||''}</div>
+        <div class="sub">${escapeHtml(s.method||'')}${s.weather?' · '+escapeHtml(s.weather):''} · ${totalAnimals} animals across ${(s.fields||[]).length} field${(s.fields||[]).length!==1?'s':''}</div></div>
+        <div class="actions">
+          <button class="edit" data-id="${s.id}">Edit</button>
+          <button class="del" data-id="${s.id}">Delete</button>
+        </div>
+      </div>
+      <div class="hist-session-fields" id="fields-${s.id}" style="display:none;">${sessionTallyHtml(s)}</div>
+    </div>`;
+  }).join('');
+
+  el.querySelectorAll('[data-toggle]').forEach(row=>{
+    row.addEventListener('click', e=>{
+      if(e.target.closest('.actions')) return;
+      const id = row.dataset.toggle;
+      const fieldsEl = $('fields-'+id);
+      fieldsEl.style.display = fieldsEl.style.display==='none' ? 'block' : 'none';
+    });
+  });
+  el.querySelectorAll('.edit').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      e.stopPropagation();
+      const session = currentSessions.find(s=>s.id===btn.dataset.id);
+      $('history-sheet-overlay').remove();
+      openSessionSetupModal(session);
+    });
+  });
+  el.querySelectorAll('.del').forEach(btn=>{
+    btn.addEventListener('click', async e=>{
+      e.stopPropagation();
+      if(!confirm('Delete this whole count? This removes every field logged in it and cannot be undone.')) return;
+      try{
+        await DC.fns.deleteDoc(DC.fns.doc(DC.db,'farms',currentFarmId,'sessions',btn.dataset.id));
+        showToast('Count deleted');
+        renderHistoryList();
+      }catch(err){ console.error(err); showToast('Could not delete — check connection', true); }
+    });
+  });
+  el.querySelectorAll('.del-field').forEach(btn=>{
+    btn.addEventListener('click', async e=>{
+      e.stopPropagation();
+      if(!confirm('Remove this field from the count?')) return;
+      const session = currentSessions.find(s=>s.id===btn.dataset.session);
+      if(!session) return;
+      const newFields = (session.fields||[]).filter(f=>f.parcelId!==btn.dataset.parcel);
+      try{
+        if(newFields.length){
+          await DC.fns.updateDoc(DC.fns.doc(DC.db,'farms',currentFarmId,'sessions',session.id), { fields:newFields });
+        } else {
+          await DC.fns.deleteDoc(DC.fns.doc(DC.db,'farms',currentFarmId,'sessions',session.id));
+        }
+        showToast('Field removed');
+        renderHistoryList();
+      }catch(err){ console.error(err); showToast('Could not remove — check connection', true); }
+    });
+  });
 }
 
 // -------------------- Settings screen --------------------
@@ -637,9 +851,9 @@ async function deleteCurrentFarm(){
   if(!confirm(`Delete "${currentFarmData.name}" completely? This removes all its fields and scan history and can't be undone.`)) return;
   if(!confirm('Really sure? Type OK to confirm deletion.')) return;
   try{
-    const scansSnap = await DC.fns.getDocs(DC.fns.collection(DC.db,'farms',currentFarmId,'scans'));
+    const sessionsSnap = await DC.fns.getDocs(DC.fns.collection(DC.db,'farms',currentFarmId,'sessions'));
     const batch = DC.fns.writeBatch(DC.db);
-    scansSnap.forEach(d=> batch.delete(d.ref));
+    sessionsSnap.forEach(d=> batch.delete(d.ref));
     batch.delete(DC.fns.doc(DC.db,'farms',currentFarmId));
     await batch.commit();
     showToast('Farm deleted');
@@ -651,33 +865,55 @@ async function deleteCurrentFarm(){
 }
 
 // -------------------- Export (Excel) --------------------
-function exportExcel(){
-  if(!currentScans.length){ showToast('No scans to export yet', true); return; }
+function buildWorkbookForSessions(farmName, sessions){
   const rows = [];
-  // Totals summary block
   const totals = {};
-  currentScans.forEach(s=> (s.counts||[]).forEach(c=>{
+  sessions.forEach(s=> (s.fields||[]).forEach(f=> (f.counts||[]).forEach(c=>{
     totals[c.species] = (totals[c.species]||0) + Number(c.count||0);
-  }));
-  rows.push(['Deer Count — Export', currentFarmData.name || '']);
+  })));
+  rows.push(['Deer Count — Export', farmName || '']);
   rows.push(['Generated', new Date().toLocaleString()]);
   rows.push([]);
   rows.push(['TOTALS']);
   Object.entries(totals).sort((a,b)=>b[1]-a[1]).forEach(([sp,ct])=> rows.push(['', sp, ct]));
   rows.push([]);
-  rows.push(['Farm','Date','Weather','Field name','Method','Animal','Count','Notes']);
-  currentScans.slice().sort((a,b)=> a.date.localeCompare(b.date)).forEach(s=>{
-    (s.counts||[]).forEach(c=>{
-      rows.push([currentFarmData.name||'', s.date, s.weather||'', s.parcelName||'', s.method||'', c.species, c.count, s.notes||'']);
+  rows.push(['Farm','Date','Time','Weather','Field name','Method','Animal','Count','Notes']);
+  sessions.slice().sort((a,b)=> `${a.date} ${a.time||''}`.localeCompare(`${b.date} ${b.time||''}`)).forEach(s=>{
+    (s.fields||[]).forEach(f=>{
+      (f.counts||[]).forEach(c=>{
+        rows.push([farmName||'', s.date, s.time||'', s.weather||'', f.parcelName||'', s.method||'', c.species, c.count, s.notes||'']);
+      });
     });
   });
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:18},{wch:12},{wch:16},{wch:16},{wch:22},{wch:20},{wch:8},{wch:30}];
+  ws['!cols'] = [{wch:18},{wch:12},{wch:8},{wch:16},{wch:16},{wch:22},{wch:20},{wch:8},{wch:30}];
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Scans');
+  XLSX.utils.book_append_sheet(wb, ws, 'Counts');
+  return wb;
+}
+function exportExcel(){
+  if(!currentSessions.length){ showToast('No counts to export yet', true); return; }
+  const wb = buildWorkbookForSessions(currentFarmData.name, currentSessions);
   const fname = `deer-count-${(currentFarmData.name||'farm').replace(/[^a-z0-9]+/gi,'-')}-${new Date().toISOString().slice(0,10)}.xlsx`;
   XLSX.writeFile(wb, fname);
   showToast('Export downloaded');
+}
+async function exportAllFarms(){
+  if(!allFarms.length){ showToast('No farms to export', true); return; }
+  showToast('Exporting all farms…');
+  for(const farm of allFarms){
+    try{
+      const snap = await DC.fns.getDocs(DC.fns.collection(DC.db,'farms',farm.id,'sessions'));
+      const sessions = [];
+      snap.forEach(d=> sessions.push({ id:d.id, ...d.data() }));
+      if(!sessions.length) continue;
+      const wb = buildWorkbookForSessions(farm.name, sessions);
+      const fname = `deer-count-${(farm.name||'farm').replace(/[^a-z0-9]+/gi,'-')}-${new Date().toISOString().slice(0,10)}.xlsx`;
+      XLSX.writeFile(wb, fname);
+      await new Promise(r=>setTimeout(r, 400));
+    }catch(e){ console.error('Export failed for farm', farm.name, e); }
+  }
+  showToast('All farm exports downloaded');
 }
 
 // -------------------- Dropbox backup --------------------
@@ -686,7 +922,7 @@ async function backupToDropbox(){
   if(!token){ return; }
   if(!navigator.onLine){ return; }
   try{
-    const payload = JSON.stringify({ farm: currentFarmData, scans: currentScans, backedUpAt: new Date().toISOString() });
+    const payload = JSON.stringify({ farm: currentFarmData, sessions: currentSessions, backedUpAt: new Date().toISOString() });
     const res = await fetch('https://content.dropboxapi.com/2/files/upload', {
       method:'POST',
       headers:{

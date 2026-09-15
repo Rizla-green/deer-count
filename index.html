@@ -6,6 +6,7 @@
 <title>Deer Count</title>
 <meta name="theme-color" content="#161d17">
 <link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
@@ -81,6 +82,28 @@
   .parcel-label::before{display:none;}
   .count-badge-icon{background:var(--danger);color:#fff;font-size:11px;font-weight:700;border-radius:50%;
     width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg);}
+  .count-badge-icon.staged{background:var(--warn);color:#1a1a0a;border:2px dashed var(--bg);}
+
+  .count-bar{position:absolute;bottom:0;left:0;right:0;z-index:400;padding:14px;
+    background:linear-gradient(to top, rgba(15,20,16,0.96), rgba(15,20,16,0.7));}
+  #active-session-bar{display:flex;flex-direction:column;gap:8px;}
+  .active-session-info{font-size:12px;color:var(--muted);text-align:center;background:rgba(22,29,23,0.8);
+    border:1px solid var(--border);border-radius:8px;padding:6px 10px;}
+  .active-session-info b{color:var(--text);}
+
+  .hist-session{background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px;}
+  .hist-session .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px;cursor:pointer;}
+  .hist-session .date{font-size:14px;font-weight:700;}
+  .hist-session .sub{font-size:11px;color:var(--muted);margin-top:2px;}
+  .hist-session .actions{display:flex;gap:6px;flex-shrink:0;}
+  .hist-session .actions button{background:var(--panel3);border:1px solid var(--border);color:var(--muted);
+    border-radius:7px;padding:5px 9px;font-size:11.5px;}
+  .hist-session .actions button.del{color:var(--danger);}
+  .hist-field-row{display:flex;justify-content:space-between;align-items:center;background:var(--panel3);
+    border-radius:8px;padding:7px 10px;margin-top:6px;}
+  .hist-field-row .fname{font-size:12.5px;font-weight:600;}
+  .hist-field-row .ftally{font-size:11px;color:var(--muted);margin-top:2px;}
+  .hist-field-row .del-field{background:none;border:none;color:var(--muted);font-size:16px;padding:2px 6px;}
 
   /* Bottom sheet */
   .sheet-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:1000;display:flex;align-items:flex-end;
@@ -197,7 +220,10 @@
       <button class="icon-btn" id="account-btn">⋮</button>
     </div>
     <div class="scroll">
-      <div class="content" id="farm-list"></div>
+      <div class="content">
+        <div id="farm-list"></div>
+        <button class="btn secondary" id="export-all-btn" style="margin-top:6px;">Export all farms (Excel)</button>
+      </div>
     </div>
     <button class="fab" id="add-farm-fab">+</button>
   </div>
@@ -208,8 +234,20 @@
     <div class="map-topbar">
       <span class="pill"><button id="map-back-btn">‹</button><span id="map-farm-name">Farm</span></span>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
-        <span class="pill" style="padding:8px 10px;"><button id="map-settings-btn">⚙️</button></span>
+        <span class="pill" style="padding:8px 10px;gap:10px;">
+          <button id="map-history-btn">📋</button><button id="map-settings-btn">⚙️</button>
+        </span>
         <span class="weather-pill" id="weather-pill">—</span>
+      </div>
+    </div>
+    <div class="count-bar" id="count-bar">
+      <button class="btn" id="start-count-btn">Start count</button>
+      <div id="active-session-bar" style="display:none;">
+        <div class="active-session-info" id="active-session-info"></div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn secondary" id="discard-count-btn" style="flex:1;">Discard</button>
+          <button class="btn" id="save-count-btn" style="flex:2;">Save count</button>
+        </div>
       </div>
     </div>
   </div>
