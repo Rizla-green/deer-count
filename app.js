@@ -55,7 +55,7 @@ let allFarms = [];
 let currentSessions = [];
 let activeSession = null; // { id: null|existingId, date, time, method, weather, notes, fields:[{parcelId,parcelName,counts:[]}] }
 
-let map, drawnItemsLayer, drawControl;
+let map, drawnItemsLayer, badgeLayer, drawControl;
 let activeParcelId = null;
 let pendingDrawLayer = null;
 
@@ -247,6 +247,7 @@ function openFarmMap(farmId){
   $('map-farm-name-text').textContent = currentFarmData.name || 'Farm';
   $('map-farmer-name-text').textContent = currentFarmData.farmerName || '';
   activeSession = null;
+  currentSessions = [];
   showScreen('screen-map');
   fetchWeather();
   subscribeSessions(farmId);
@@ -264,6 +265,8 @@ function initMap(){
 
   drawnItemsLayer = new L.FeatureGroup();
   map.addLayer(drawnItemsLayer);
+  badgeLayer = new L.FeatureGroup();
+  map.addLayer(badgeLayer);
 
   drawControl = new L.Control.Draw({
     position:'topright',
@@ -312,6 +315,7 @@ function parcelColor(type){
 function redrawParcels(){
   if(!drawnItemsLayer) return;
   drawnItemsLayer.clearLayers();
+  if(badgeLayer) badgeLayer.clearLayers();
   const parcels = currentFarmData.parcels || [];
   parcels.forEach(p=>{
     const latlngs = p.latlngs.map(c=> L.latLng(c.lat, c.lng));
@@ -499,9 +503,10 @@ async function saveActiveSession(){
 // ---- Badges on the map ----
 function refreshAllBadges(){
   if(!drawnItemsLayer) return;
+  if(badgeLayer) badgeLayer.clearLayers();
   drawnItemsLayer.eachLayer(layer=>{
     const parcelId = layer._parcelId;
-    if(layer._badgeMarker){ map.removeLayer(layer._badgeMarker); layer._badgeMarker=null; }
+    layer._badgeMarker = null;
 
     let total = null, staged = false;
     if(activeSession){
@@ -518,7 +523,8 @@ function refreshAllBadges(){
     if(total===null || !total) return;
     const center = layer.getBounds().getCenter();
     const icon = L.divIcon({ className:'', html:`<div class="count-badge-icon${staged?' staged':''}">${total}</div>`, iconSize:[24,24] });
-    layer._badgeMarker = L.marker(center, { icon, interactive:false }).addTo(map);
+    layer._badgeMarker = L.marker(center, { icon, interactive:false });
+    badgeLayer.addLayer(layer._badgeMarker);
   });
 }
 
