@@ -35,7 +35,7 @@
   label{display:block;font-size:11.5px;color:var(--muted);margin:10px 0 5px;text-transform:uppercase;letter-spacing:.04em;}
   input[type=text],input[type=email],input[type=password],input[type=number],input[type=date],select{
     width:100%;padding:11px 13px;background:var(--panel2);border:1px solid var(--border);
-    border-radius:9px;color:var(--text);font-size:15px;
+    border-radius:9px;color:var(--text);font-size:15px;height:44px;box-sizing:border-box;
   }
   .btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:13px 14px;font-size:15px;font-weight:600;width:100%;text-align:center;}
   .btn:active{background:var(--accent2);}
@@ -77,6 +77,10 @@
     padding:8px 14px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:6px;}
   .pill button{background:none;border:none;color:var(--text);font-size:15px;}
   .weather-pill{background:rgba(22,29,23,0.92);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:11.5px;color:var(--muted);}
+  .leaflet-top.leaflet-right{top:96px;}
+  .leaflet-control-layers, .leaflet-bar{box-shadow:0 3px 10px rgba(0,0,0,0.4)!important;}
+
+  input[type=date]{ -webkit-appearance:none; appearance:none; height:44px; line-height:1.2; }
   .parcel-label{background:rgba(10,15,10,0.55);border-radius:5px;padding:1px 6px;font-size:11px;font-weight:600;
     color:#fff;white-space:nowrap;border:none!important;box-shadow:none!important;}
   .parcel-label::before{display:none;}
@@ -124,6 +128,14 @@
   .stepper button{width:28px;height:28px;border-radius:7px;background:var(--panel3);border:1px solid var(--border);color:var(--text);font-size:16px;line-height:1;}
   .stepper .val{min-width:20px;text-align:center;font-size:14px;font-weight:600;}
   .stepper input{width:44px;text-align:center;padding:5px;border-radius:6px;background:var(--bg);border:1px solid var(--border);color:var(--text);font-size:13.5px;}
+
+  @media (max-width:720px){
+    #log-sheet-overlay .stepper-row{padding:12px;}
+    #log-sheet-overlay .stepper-row .sname{font-size:16px;font-weight:600;}
+    #log-sheet-overlay .stepper{gap:14px;}
+    #log-sheet-overlay .stepper button{width:40px;height:40px;font-size:22px;}
+    #log-sheet-overlay .stepper .val{font-size:18px;min-width:28px;}
+  }
 
   .hist-item{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:8px;}
   .hist-item .top{display:flex;justify-content:space-between;margin-bottom:5px;gap:8px;}
@@ -217,12 +229,13 @@
     <div class="topbar">
       <img class="logo-sm" src="logo.png" alt="">
       <h1>Your Farms</h1>
-      <button class="icon-btn" id="account-btn">⋮</button>
+      <button class="icon-btn" id="account-btn" style="font-size:13px;">Log out</button>
     </div>
     <div class="scroll">
       <div class="content">
         <div id="farm-list"></div>
         <button class="btn secondary" id="export-all-btn" style="margin-top:6px;">Export all farms (Excel)</button>
+        <div id="app-version" style="text-align:center;color:var(--muted);font-size:11px;margin-top:16px;"></div>
       </div>
     </div>
     <button class="fab" id="add-farm-fab">+</button>
@@ -232,7 +245,7 @@
   <div class="screen" id="screen-map">
     <div id="map"></div>
     <div class="map-topbar">
-      <span class="pill"><button id="map-back-btn">‹</button><span id="map-farm-name">Farm</span></span>
+      <span class="pill"><button id="map-back-btn">‹</button><span id="map-farm-name" style="display:flex;flex-direction:column;align-items:flex-start;line-height:1.25;"><b id="map-farm-name-text">Farm</b><span id="map-farmer-name-text" style="font-size:10px;color:var(--muted);"></span></span></span>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
         <span class="pill" style="padding:8px 10px;gap:10px;">
           <button id="map-history-btn">📋</button><button id="map-settings-btn">⚙️</button>
@@ -264,7 +277,11 @@
         <div class="settings-section">
           <h3>Farm details</h3>
           <label style="margin-top:0;">Farm name</label>
-          <input type="text" id="set-farm-name">
+          <input type="text" id="set-farm-name" style="font-size:17px;font-weight:700;">
+          <label>Farmer's name</label>
+          <input type="text" id="set-farmer-name" placeholder="e.g. John Smith">
+          <label>Full address</label>
+          <input type="text" id="set-address" placeholder="e.g. Long Meadow Farm, Leighton Buzzard">
           <label>Postcode (for weather)</label>
           <input type="text" id="set-postcode" placeholder="e.g. LU7 0LB">
         </div>
@@ -273,7 +290,7 @@
           <h3>UK Deer species present</h3>
           <div class="chip-row" id="deer-species-chips"></div>
           <div class="toggle-row" style="margin-top:10px;">
-            <span>Log Buck/Doe/Young breakdown (off = one total per species)</span>
+            <span id="deer-detail-label">Log Male / Female / Young breakdown</span>
             <button class="toggle" id="deer-detail-toggle"></button>
           </div>
         </div>
@@ -287,7 +304,13 @@
         <div class="settings-section">
           <h3>Fields &amp; parcels</h3>
           <div id="parcel-list"></div>
-          <div class="empty" id="parcel-empty-hint" style="padding:14px;font-size:12px;">Draw parcels on the map screen — tap "Add field" there.</div>
+          <div class="empty" id="parcel-empty-hint" style="padding:14px;font-size:12px;">Draw parcels on the map screen — use the draw tool top-right.</div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Crops</h3>
+          <div class="chip-row" id="crop-chips"></div>
+          <button class="chip add-chip" id="add-crop-btn">+ Add crop</button>
         </div>
 
         <div class="settings-section">
@@ -304,7 +327,9 @@
 
         <div class="settings-section">
           <h3>Game shoot</h3>
-          <div class="toggle-row"><span>Runs a game shoot</span><button class="toggle" id="shoot-toggle"></button></div>
+          <div class="toggle-row"><span>Game shoot present</span><button class="toggle" id="shoot-toggle"></button></div>
+          <div class="chip-row" id="gamecover-chips"></div>
+          <button class="chip add-chip" id="add-gamecover-btn">+ Add game cover</button>
         </div>
 
         <div class="settings-section">
